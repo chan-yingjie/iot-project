@@ -1,0 +1,353 @@
+import React, { useState, useEffect } from 'react';
+import {
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Container,
+  Grid,
+  MenuItem,
+  Select,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+  Typography,
+  Tabs,
+  Tab,
+  Paper
+} from '@mui/material';
+import { CalendarHeatmap } from './components/CalendarHeatmap';
+import { MedicationRingChart } from './components/MedicationRingChart';
+import { TimeSeriesChart } from './components/TimeSeriesChart';
+
+// Mock data for demonstration
+const mockReminders = [
+  { id: 1, name: 'Metformin', time: '08:00', dose: '500mg', status: 'Pending' },
+  { id: 2, name: 'Lisinopril', time: '12:00', dose: '10mg', status: 'Completed' },
+  { id: 3, name: 'Atorvastatin', time: '20:00', dose: '20mg', status: 'Pending' }
+];
+
+const mockWeeklyPlan = [
+  { day: 'Monday', medications: [
+    { name: 'Metformin', time: '08:00', dose: '500mg' }
+  ]},
+  { day: 'Tuesday', medications: [
+    { name: 'Metformin', time: '08:00', dose: '500mg' },
+    { name: 'Lisinopril', time: '12:00', dose: '10mg' }
+  ]}
+];
+
+const mockAnalytics = {
+  adherenceRate: 85,
+  missedDoses: 2,
+  takenDoses: 14,
+  heatmapData: Array(30).fill(0).map((_, i) => ({
+    date: new Date(2023, 5, i + 1),
+    value: Math.floor(Math.random() * 3) // 0=missed, 1=late, 2=on time
+  })),
+  timeSeries: Array(7).fill(0).map((_, i) => ({
+    date: new Date(2023, 5, i + 1),
+    taken: Math.floor(Math.random() * 5),
+    missed: Math.floor(Math.random() * 2)
+  }))
+};
+
+function App() {
+  const [activeTab, setActiveTab] = useState('home');
+  const [selectedDate, setSelectedDate] = useState('all');
+
+  const handleTabChange = (event, newValue) => {
+    setActiveTab(newValue);
+  };
+
+  return (
+    <Container maxWidth="md" sx={{ py: 4 }}>
+      {activeTab === 'home' && (
+        <Box textAlign="center">
+          <Typography variant="h4" gutterBottom>
+            MedTrack
+          </Typography>
+          <Typography variant="subtitle1" color="text.secondary" gutterBottom>
+            Your personal smart medicine assistant – stay on track with your medication schedule.
+          </Typography>
+          <Typography variant="body1" sx={{ mb: 4 }}>
+            Select a function to get started 😊
+          </Typography>
+          
+          <Grid container spacing={3} justifyContent="center">
+            <Grid item xs={12} sm={6} md={4}>
+              <Card 
+                sx={{ height: '100%', cursor: 'pointer' }} 
+                onClick={() => setActiveTab('reminders')}
+              >
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    💊 Reminder List
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    View and manage your upcoming medication reminders
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            
+            <Grid item xs={12} sm={6} md={4}>
+              <Card 
+                sx={{ height: '100%', cursor: 'pointer' }} 
+                onClick={() => setActiveTab('weekly-plan')}
+              >
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    🗓️ Weekly Plan
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Set up your weekly medication schedule
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            
+            <Grid item xs={12} sm={6} md={4}>
+              <Card 
+                sx={{ height: '100%', cursor: 'pointer' }} 
+                onClick={() => setActiveTab('analytics')}
+              >
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    📊 Medication Analytics
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Track your medication adherence and patterns
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            
+            <Grid item xs={12} sm={6} md={4}>
+              <Card 
+                sx={{ height: '100%', cursor: 'pointer' }} 
+                onClick={() => setActiveTab('settings')}
+              >
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    ⚙️ Reminder Settings
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Configure notification preferences
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        </Box>
+      )}
+
+      {activeTab === 'reminders' && (
+        <Box>
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+            <Typography variant="h5">💊 Medication Reminders</Typography>
+            <Select
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              size="small"
+              sx={{ minWidth: 120 }}
+            >
+              <MenuItem value="all">All Dates</MenuItem>
+              <MenuItem value="today">Today</MenuItem>
+              <MenuItem value="2023-06-01">June 1</MenuItem>
+              <MenuItem value="2023-06-02">June 2</MenuItem>
+            </Select>
+          </Box>
+          
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableCell>Medication</TableCell>
+                <TableCell>Time</TableCell>
+                <TableCell>Dose</TableCell>
+                <TableCell>Status</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {mockReminders.map((row) => (
+                <TableRow key={row.id}>
+                  <TableCell>{row.name}</TableCell>
+                  <TableCell>{row.time}</TableCell>
+                  <TableCell>{row.dose}</TableCell>
+                  <TableCell>
+                    <Button 
+                      variant={row.status === 'Completed' ? "contained" : "outlined"}
+                      size="small"
+                      color={row.status === 'Completed' ? "success" : "primary"}
+                    >
+                      {row.status}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Box>
+      )}
+
+      {activeTab === 'weekly-plan' && (
+        <Box>
+          <Typography variant="h5" gutterBottom>
+            🗓️ Weekly Medication Schedule
+          </Typography>
+          
+          <Grid container spacing={3}>
+            {mockWeeklyPlan.map((dayPlan) => (
+              <Grid item xs={12} sm={6} key={dayPlan.day}>
+                <Card>
+                  <CardContent>
+                    <Typography variant="h6">{dayPlan.day}</Typography>
+                    {dayPlan.medications.length > 0 ? (
+                      <Box component="ul" sx={{ pl: 2 }}>
+                        {dayPlan.medications.map((med, idx) => (
+                          <li key={idx}>
+                            <Typography variant="body2">
+                              {med.name} - {med.time} ({med.dose})
+                            </Typography>
+                          </li>
+                        ))}
+                      </Box>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        No medications scheduled
+                      </Typography>
+                    )}
+                  </CardContent>
+                </Card>
+              </Grid>
+            ))}
+          </Grid>
+          
+          <Box mt={3}>
+            <Button variant="contained">
+              + Add New Medication Schedule
+            </Button>
+          </Box>
+        </Box>
+      )}
+
+      {activeTab === 'analytics' && (
+        <Box>
+          <Typography variant="h5" gutterBottom>
+            📊 Medication Adherence Analytics
+          </Typography>
+          
+          <Grid container spacing={3}>
+            <Grid item xs={12} md={6}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    Monthly Overview
+                  </Typography>
+                  <CalendarHeatmap data={mockAnalytics.heatmapData} />
+                </CardContent>
+              </Card>
+            </Grid>
+            
+            <Grid item xs={12} md={6}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    Adherence Rate
+                  </Typography>
+                  <MedicationRingChart value={mockAnalytics.adherenceRate} />
+                  <Typography variant="body2" textAlign="center" mt={2}>
+                    {mockAnalytics.takenDoses} doses taken • {mockAnalytics.missedDoses} missed
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            
+            <Grid item xs={12}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    Weekly Trend
+                  </Typography>
+                  <TimeSeriesChart data={mockAnalytics.timeSeries} />
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        </Box>
+      )}
+
+      {activeTab === 'settings' && (
+        <Box>
+          <Typography variant="h5" gutterBottom>
+            ⚙️ Reminder Settings
+          </Typography>
+          
+          <Card>
+            <CardContent>
+              <Typography variant="h6" gutterBottom>
+                Notification Preferences
+              </Typography>
+              
+              <Box component="form" sx={{ '& .MuiTextField-root': { my: 1 } }}>
+                <Grid container spacing={3}>
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="subtitle2">Reminder Times</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Set your preferred reminder times
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Select
+                      fullWidth
+                      multiple
+                      value={['morning', 'evening']}
+                      renderValue={(selected) => selected.join(', ')}
+                    >
+                      <MenuItem value="morning">Morning (8:00 AM)</MenuItem>
+                      <MenuItem value="afternoon">Afternoon (1:00 PM)</MenuItem>
+                      <MenuItem value="evening">Evening (8:00 PM)</MenuItem>
+                    </Select>
+                  </Grid>
+                  
+                  <Grid item xs={12} md={6}>
+                    <Typography variant="subtitle2">Notification Method</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      How would you like to receive reminders?
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <Select fullWidth value="both">
+                      <MenuItem value="push">Push Notification</MenuItem>
+                      <MenuItem value="email">Email</MenuItem>
+                      <MenuItem value="both">Both</MenuItem>
+                    </Select>
+                  </Grid>
+                </Grid>
+              </Box>
+            </CardContent>
+          </Card>
+        </Box>
+      )}
+
+      <Paper sx={{ position: 'fixed', bottom: 0, left: 0, right: 0 }} elevation={3}>
+        <Tabs
+          value={activeTab}
+          onChange={handleTabChange}
+          variant="fullWidth"
+          centered
+        >
+          <Tab label="Home" value="home" />
+          <Tab label="Reminders" value="reminders" />
+          <Tab label="Weekly Plan" value="weekly-plan" />
+          <Tab label="Analytics" value="analytics" />
+          <Tab label="Settings" value="settings" />
+        </Tabs>
+      </Paper>
+    </Container>
+  );
+}
+
+export default App;
