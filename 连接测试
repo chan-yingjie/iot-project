@@ -1,0 +1,347 @@
+#include <WiFi.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Firebase_ESP_Client.h>
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
+
+/* ---------- Wi‑Fi ---------- */
+#define WIFI_SSID     "chanchan"
+#define WIFI_PASSWORD "00000000"
+
+/* ---------- Firebase / Firestore ---------- */
+#define API_KEY        "AIzaSyCIHkTK_SSNpPbjU3FLSGu8fDg7gR38q-s"
+#define DATABASE_URL   "https://smart-medi-v0.firebaseio.com"
+#define FIREBASE_PROJECT_ID "smart-medi-v0"
+#define DATABASE_ID         "(default)"
+#define USER_EMAIL    "esp32@smartpillbox.com"
+#define USER_PASSWORD "12345678"
+
+/* ---------- I/O ---------- */
+#define LED_PIN     17
+#define BUZZER_PIN  18
+#define IR_SENSOR_PIN 36
+#define IN1 2
+#define IN2 13
+#define IN3 25
+#define IN4 26
+
+/* ---------- OLED ---------- */
+#define SCREEN_WIDTH  128
+#define SCREEN_HEIGHT  64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+/* ---------- 步进电机序列 ---------- */
+const int stepSequence[8][4] = {
+  {1,0,0,0}, {1,1,0,0}, {0,1,0,0}, {0,1,1,0},
+  {0,0,1,0}, {0,0,1,1}, {0,0,0,1}, {1,0,0,1}
+};
+
+/* ---------- Firebase 对象 ---------- */
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+bool taskDone = false;
+unsigned long dataMillis = 0;
+
+/* ========================================================================= */
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22); // OLED SDA/SCL 引脚
+
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(IR_SENSOR_PIN, INPUT);
+  pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT);
+
+  Serial.println("🔧 Booting...");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("📡 Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\n✅ WiFi connected.");
+  Serial.print("📶 IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  // 初始化OLED
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3D)) {
+    Serial.println("SSD1306 allocation failed");
+  } else {
+    display.clearDisplay();
+    display.setTextSize(2);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 20);
+    display.println("WELCOME");
+    display.display();
+    delay(3000);
+  }
+
+  initFirebase();
+}
+
+void loop() {
+  if (Firebase.ready() && !taskDone) {
+    Serial.println("Firebase ready, checking weekly plans...");
+    checkWeeklyPlans();
+    taskDone = true;
+  }
+  
+  // 每60秒检查一次
+  if (millis() - dataMillis > 60000 && Firebase.ready())
+  {
+    dataMillis = millis();
+    Serial.println("Periodic check of weekly plans...");
+    checkWeeklyPlans();
+  }
+}
+
+/* ========================================================================= */
+void initFirebase() {
+  Serial.println("Initializing Firebase...");
+  
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+  
+  // 设置登录凭据
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
+  
+  // 添加回调函数
+  config.token_status_callback = tokenStatusCallback;
+  
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+  
+  Serial.println("🔥 Firebase initialized.");
+  
+  // 等待认证完成
+  Serial.println("Waiting for authentication...");
+  int authAttempts = 0;
+  while (Firebase.isTokenExpired() && authAttempts < 30) {
+    Serial.print(".");
+    delay(1000);
+    authAttempts++;
+  }
+  
+  if (Firebase.isTokenExpired()) {
+    Serial.println("\n❌ Authentication failed after 30 seconds!");
+  } else {
+    Serial.println("\n✅ Firebase authenticated!");
+  }
+}
+
+/* ========================================================================= */
+void checkWeeklyPlans() {
+  // 实际应用中应该使用RTC或NTP获取当前时间
+  const String today = "2025-05-13";
+  const String now = "14:34";
+  
+  Serial.println("Checking weekly plans for " + today + " " + now);
+
+  // 使用正确的集合路径格式
+  String collectionPath = "weeklyPlans";
+  
+  Serial.println("Attempting to list documents in collection: " + collectionPath);
+  
+  if (Firebase.Firestore.listDocuments(&fbdo, FIREBASE_PROJECT_ID, "", 
+                                       collectionPath.c_str(), 10, 
+                                       "", "", "", false)) {
+    
+    Serial.println("Retrieved documents list");
+    Serial.println("Raw payload: " + fbdo.payload());
+    
+    // 将响应数据解析为JSON
+    FirebaseJson payload;
+    payload.setJsonData(fbdo.payload());
+    
+    // 获取文档数量
+    FirebaseJsonData documentsArray;
+    payload.get(documentsArray, "documents");
+    
+    if (documentsArray.success && documentsArray.type == "array") {
+      FirebaseJsonArray docArray;
+      docArray.setJsonArrayData(documentsArray.stringValue);
+      
+      Serial.print("Found ");
+      Serial.print(docArray.size());
+      Serial.println(" documents");
+      
+      // 遍历每个文档
+      for (size_t i = 0; i < docArray.size(); i++) {
+        FirebaseJsonData docItem;
+        docArray.get(docItem, i);
+        
+        if (docItem.success) {
+          FirebaseJson docJson;
+          docJson.setJsonData(docItem.stringValue);
+          
+          // 获取文档名称/路径
+          FirebaseJsonData nameData;
+          docJson.get(nameData, "name");
+          
+          if (nameData.success) {
+            String docPath = nameData.stringValue;
+            Serial.println("📄 Document path: " + docPath);
+            
+            // 从路径中提取文档ID
+            int lastSlash = docPath.lastIndexOf('/');
+            String docId = (lastSlash != -1) ? docPath.substring(lastSlash + 1) : docPath;
+            
+            // 获取单个文档详情
+            Serial.println("Attempting to get document: " + docId);
+            
+            // 使用正确的文档路径格式
+            if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", 
+                                              (collectionPath + "/" + docId).c_str(), "")) {
+              
+              Serial.println("Retrieved document details");
+              Serial.println("Document payload: " + fbdo.payload());
+              
+              FirebaseJson contentJson;
+              contentJson.setJsonData(fbdo.payload());
+              
+              // 直接提取字段值
+              FirebaseJsonData dateField, timeField;
+              contentJson.get(dateField, "fields/date/stringValue");
+              contentJson.get(timeField, "fields/time/stringValue");
+              
+              String date = dateField.success ? dateField.stringValue : "Unknown date";
+              String time = timeField.success ? timeField.stringValue : "Unknown time";
+              
+              Serial.print("📅 Date = "); Serial.print(date);
+              Serial.print(" | 🕒 Time = "); Serial.println(time);
+              
+              // 打印JSON结构以便调试
+              Serial.println("Document structure:");
+              printJsonStructure(contentJson, "");
+              
+              if (date == today && time == now) {
+                Serial.println("🔔 Reminder triggered!");
+                triggerReminder();
+                logMedicationRecord(date, time, "taken");
+              }
+            } else {
+              Serial.println("❌ getDocument error: " + fbdo.errorReason());
+            }
+          } else {
+            Serial.println("❌ Could not extract document name");
+          }
+        } else {
+          Serial.println("❌ Could not extract document at index " + String(i));
+        }
+      }
+    } else {
+      Serial.println("❌ No documents found or array parsing error");
+      Serial.println("Type: " + String(documentsArray.type));
+      Serial.println("Success: " + String(documentsArray.success));
+    }
+  } else {
+    Serial.println("❌ listDocuments error: " + fbdo.errorReason());
+    Serial.println("Error code: " + String(fbdo.errorCode()));
+  }
+}
+
+// 调试助手：打印JSON结构
+void printJsonStructure(FirebaseJson &json, String path) {
+  Serial.println("Examining JSON structure at path: " + path);
+  
+  FirebaseJsonData result;
+  size_t len = json.iteratorBegin();
+  String key, value;
+  int type = 0;
+  
+  for (size_t i = 0; i < len; i++) {
+    json.iteratorGet(i, type, key, value);
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.print("Type: ");
+    Serial.print(type == FirebaseJson::JSON_OBJECT ? "object" : 
+                type == FirebaseJson::JSON_ARRAY ? "array" : 
+                type == FirebaseJson::JSON_STRING ? "string" : 
+                type == FirebaseJson::JSON_INT ? "int" : 
+                type == FirebaseJson::JSON_FLOAT ? "float" : 
+                type == FirebaseJson::JSON_DOUBLE ? "double" : 
+                type == FirebaseJson::JSON_BOOL ? "boolean" : 
+                type == FirebaseJson::JSON_NULL ? "null" : "unknown");
+    Serial.print(", Key: ");
+    Serial.print(key);
+    Serial.print(", Value: ");
+    Serial.println(value.length() > 30 ? value.substring(0, 30) + "..." : value);
+  }
+  
+  json.iteratorEnd();
+}
+
+/* ========================================================================= */
+void triggerReminder() {
+  digitalWrite(LED_PIN, HIGH);
+  tone(BUZZER_PIN, 1000);
+
+  display.clearDisplay();
+  display.setCursor(0, 20);
+  display.println("Take meds");
+  display.display();
+
+  rotateStepper(682);
+
+  unsigned long start = millis();
+  while (millis() - start < 10000) {
+    if (analogRead(IR_SENSOR_PIN) > 1000) {
+      digitalWrite(LED_PIN, LOW);
+      noTone(BUZZER_PIN);
+      display.clearDisplay();
+      display.setCursor(30, 20);
+      display.println("DONE");
+      display.display();
+      return;
+    }
+    delay(200);
+  }
+  digitalWrite(LED_PIN, LOW);
+  noTone(BUZZER_PIN);
+}
+
+void rotateStepper(int steps) {
+  for (int i = 0; i < steps; ++i) {
+    int seq = i & 0x7;
+    digitalWrite(IN1, stepSequence[seq][0]);
+    digitalWrite(IN2, stepSequence[seq][1]);
+    digitalWrite(IN3, stepSequence[seq][2]);
+    digitalWrite(IN4, stepSequence[seq][3]);
+    delay(2);
+  }
+  digitalWrite(IN1, LOW); digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW); digitalWrite(IN4, LOW);
+}
+
+/* ========================================================================= */
+void logMedicationRecord(String date, String time, String status) {
+  FirebaseJson content;
+  content.set("fields/date/stringValue", date);
+  content.set("fields/time/stringValue", time);
+  content.set("fields/status/stringValue", status);
+
+  String jsonString;
+  content.toString(jsonString);
+
+  const char *collectionId = "medicationRecords";
+  String docId = "record_" + String(millis());
+
+  if (!Firebase.Firestore.createDocument(
+        &fbdo,
+        FIREBASE_PROJECT_ID,
+        "",  // 删除DATABASE_ID
+        collectionId,
+        docId.c_str(),
+        jsonString.c_str(),
+        "")) {
+    Serial.println("❌ logMedicationRecord error: " + fbdo.errorReason());
+  } else {
+    Serial.println("✅ Medication record logged.");
+  }
+}
