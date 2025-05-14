@@ -1,0 +1,57 @@
+#include <WiFi.h>
+#include <Firebase_ESP_Client.h>
+
+/* ---------- Wi‑Fi ---------- */
+#define WIFI_SSID     "chanchan"
+#define WIFI_PASSWORD "00000000"
+
+/* ---------- Firebase / Firestore ---------- */
+#define API_KEY        "AIzaSyCIHkTK_SSNpPbjU3FLSGu8fDg7gR38q-s"
+#define DATABASE_URL   "https://smart-medi-v0.firebaseio.com"
+#define FIREBASE_PROJECT_ID "smart-medi-v0"
+#define DATABASE_ID        "(default)"
+#define USER_EMAIL    "esp32@smartpillbox.com"
+#define USER_PASSWORD "12345678"
+
+/* ---------- Firebase 对象 ---------- */
+FirebaseData   fbdo;
+FirebaseAuth   auth;
+FirebaseConfig config;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println(F("🔧 Booting..."));
+
+  // 连接 WiFi
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print(F("📡 Connecting to WiFi"));
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.println(F("✅ WiFi connected."));
+  Serial.print(F("📶 IP Address: "));
+  Serial.println(WiFi.localIP());
+
+  // 初始化 Firebase
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
+
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+
+  Serial.println(F("🔥 Firebase begin() called."));
+}
+
+void loop() {
+  if (Firebase.ready()) {
+    Serial.println(F("✅ Firebase.ready() = true"));
+  } else {
+    Serial.println(F("⏳ Waiting for Firebase.ready()..."));
+  }
+  delay(5000);
+}
