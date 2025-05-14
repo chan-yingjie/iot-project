@@ -1,0 +1,117 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define LED_PIN 17
+#define BUZZER_PIN 18
+#define BUTTON_PIN 4
+#define IR_SENSOR_PIN 36
+#define IN1 2
+#define IN2 13
+#define IN3 25
+#define IN4 26
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+const int stepSequence[8][4] = {
+  {1, 0, 0, 0}, {1, 1, 0, 0}, {0, 1, 0, 0}, {0, 1, 1, 0},
+  {0, 0, 1, 0}, {0, 0, 1, 1}, {0, 0, 0, 1}, {1, 0, 0, 1}
+};
+
+bool reminderStarted = false;
+bool reminderAcknowledged = false;
+unsigned long welcomeStartTime = 0;
+bool takeMedsDisplayed = false;
+
+void setup() {
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(IR_SENSOR_PIN, INPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3D);
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(10, 20);
+  display.println("WELCOME");
+  display.display();
+
+  welcomeStartTime = millis();
+}
+
+void loop() {
+  int irValue = analogRead(IR_SENSOR_PIN);
+
+  // 等待5秒后进入提醒状态
+  if (!reminderStarted && millis() - welcomeStartTime >= 5000) {
+    reminderStarted = true;
+    activateReminder();
+    showTakeMeds();
+  }
+
+  // 等待红外感应触发
+  if (reminderStarted && !reminderAcknowledged) {
+    if (irValue > 1000) {
+      reminderAcknowledged = true;
+      deactivateReminder();
+      display.clearDisplay();
+      display.setCursor(30, 20);
+      display.setTextSize(2);
+      display.setTextColor(SSD1306_WHITE);
+      display.println("DONE");
+      display.display();
+    } else {
+      // 持续提醒状态：LED + 蜂鸣器 + Take meds 保持
+      digitalWrite(LED_PIN, HIGH);
+      tone(BUZZER_PIN, 1000);
+      showTakeMeds();
+    }
+  }
+}
+
+void showTakeMeds() {
+  if (!takeMedsDisplayed) {
+    display.clearDisplay();
+    display.setCursor(10, 20);
+    display.setTextSize(2);
+    display.setTextColor(SSD1306_WHITE);
+    display.println("Take meds");
+    display.display();
+    takeMedsDisplayed = true;
+  }
+}
+
+void activateReminder() {
+  digitalWrite(LED_PIN, HIGH);
+  tone(BUZZER_PIN, 1000);
+  rotateStepper60Degrees();
+}
+
+void deactivateReminder() {
+  digitalWrite(LED_PIN, LOW);
+  noTone(BUZZER_PIN);
+}
+
+void rotateStepper60Degrees() {
+  int steps = 682; // 60 度 ≈ 682 步
+  for (int i = 0; i < steps; i++) {
+    int seq = i % 8;
+    digitalWrite(IN1, stepSequence[seq][0]);
+    digitalWrite(IN2, stepSequence[seq][1]);
+    digitalWrite(IN3, stepSequence[seq][2]);
+    digitalWrite(IN4, stepSequence[seq][3]);
+    delay(2);
+  }
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+}
