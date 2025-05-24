@@ -1,0 +1,13 @@
+
+.color-empty {
+ fill: #ebedf0;
+}
+.color-scale-green {
+ fill: #4ade80; /* On time */
+}
+.color-scale-yellow {
+ fill: #facc15; /* Late */
+}
+.color-scale-red {
+ fill: #f87171; /* Missed */
+}
