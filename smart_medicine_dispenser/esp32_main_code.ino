@@ -1,0 +1,313 @@
+#include <WiFi.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Firebase_ESP_Client.h>
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
+#include "time.h"
+
+// ---------- Wi-Fi ----------
+#define WIFI_SSID     "chanchan"
+#define WIFI_PASSWORD "00000000"
+
+// ---------- NTP ----------
+#define NTP_SERVER1   "pool.ntp.org"
+#define NTP_SERVER2   "time.nist.gov"
+#define GMT_OFFSET_SEC  28800         // GMT+8
+#define DAYLIGHT_OFFSET_SEC 0
+
+// ---------- Firestore ----------
+#define API_KEY        "AIzaSyCIHkTK_SSNpPbjU3FLSGu8fDg7gR38q-s"
+#define DATABASE_URL   "https://smart-medi-v0.firebaseio.com"
+#define FIREBASE_PROJECT_ID "smart-medi-v0"
+#define USER_EMAIL    "esp32@smartpillbox.com"
+#define USER_PASSWORD "12345678"
+
+// ---------- IO ----------
+#define LED_PIN       17
+#define BUZZER_PIN    18
+#define BUTTON_PIN     4
+#define IR_SENSOR_PIN 36
+#define IN1 2
+#define IN2 13
+#define IN3 25
+#define IN4 26
+
+// ---------- OLED ----------
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET   -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// ---------- stepper sequence ----------
+const int seq[8][4] = {
+  {1,0,0,0},{1,1,0,0},{0,1,0,0},{0,1,1,0},
+  {0,0,1,0},{0,0,1,1},{0,0,0,1},{1,0,0,1}
+};
+
+// ---------- Firebase objs ----------
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig cfg;
+
+// ---------- states ----------
+enum Stage {READY, REMINDER, WAIT_IR, SHOW_MSG};
+Stage stage = READY;
+
+// ---------- timers ----------
+unsigned long t_now;
+unsigned long t_match;           // when reminder started
+unsigned long t_btn;             // when button pressed
+unsigned long t_show;            // when THANKS / LATE / MISSED shown
+
+// ---------- constants ----------
+const unsigned long BTN_WINDOW   = 30UL * 1000;  // 30 s
+const unsigned long IR_WINDOW    = 30UL * 1000;  // 30 s after motor
+const unsigned long MSG_DURATION = 10UL * 1000;  // 10 s “Thank you/Late”
+const unsigned long LED_BLINK    = 500;
+
+// flags
+bool ntp_ok=false;
+bool led_state=false;
+bool has_next=false;
+String nextDate, nextTime;
+
+int irTriggeredCount = 0;
+const int IR_THRESHOLD = 1000;
+const int IR_DEBOUNCE_COUNT = 3;
+String triggeredDocId = "";  // 当前触发的计划文档ID
+
+// -------------- helpers ------------------------------------------------
+String dateStr() {
+  struct tm t; if(!getLocalTime(&t)) return "ERR";
+  char buf[11]; strftime(buf,sizeof(buf),"%Y-%m-%d",&t); return buf;
+}
+String timeHM() {
+  struct tm t; if(!getLocalTime(&t)) return "ERR";
+  char buf[6];  strftime(buf,sizeof(buf),"%H:%M",&t);    return buf;
+}
+String timeHMS() {
+  struct tm t; if(!getLocalTime(&t)) return "ERR";
+  char buf[9];  strftime(buf,sizeof(buf),"%H:%M:%S",&t); return buf;
+}
+
+// -------------- hardware actions ---------------------------------------
+void motor60() {
+  for(int i=0;i<512;i++){
+    int s=i&7;
+    digitalWrite(IN1,seq[s][0]);
+    digitalWrite(IN2,seq[s][1]);
+    digitalWrite(IN3,seq[s][2]);
+    digitalWrite(IN4,seq[s][3]);
+    delayMicroseconds(2000);
+  }
+  digitalWrite(IN1,LOW);digitalWrite(IN2,LOW);
+  digitalWrite(IN3,LOW);digitalWrite(IN4,LOW);
+}
+
+void oledHeader() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  if(ntp_ok){
+    display.setCursor(38,0); display.println(timeHMS());
+    display.setCursor(28,55);display.println(dateStr());
+  }
+}
+
+void oledMsg(const char* l1,const char* l2=nullptr) {
+  oledHeader();
+  display.setTextSize(2);
+  display.setCursor(8,22);
+  display.println(l1);
+  if(l2){ display.setCursor(8,42); display.println(l2); }
+  display.display();
+}
+
+// -------------- logging -----------------------------------------------
+void logRec(const char* status) {
+  FirebaseJson j;
+  j.set("fields/date/stringValue",dateStr());
+  j.set("fields/time/stringValue",timeHM());
+  j.set("fields/status/stringValue",status);
+  String id="rec_"+String(millis());
+  Firebase.Firestore.createDocument(
+        &fbdo,FIREBASE_PROJECT_ID,"","medicationRecords",
+        id.c_str(),j.raw(), "");
+}
+
+// -------------- 标记计划为已使用 --------------------------------------
+void markUsed(String docId) {
+  FirebaseJson updateJson;
+  updateJson.set("fields/used/booleanValue", true);
+  String path = "weeklyPlans/" + docId;
+  Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", path.c_str(), updateJson.raw(), "used");
+  Serial.println("Plan marked as used: " + path);
+}
+
+// -------------- WiFi, NTP, Firebase -----------------------------------
+void wifiInit() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
+  Serial.print("Connecting WiFi");
+  while(WiFi.status()!=WL_CONNECTED){delay(500);Serial.print(".");}
+  Serial.println("\nWiFi OK "+WiFi.localIP().toString());
+}
+
+void ntpInit() {
+  configTime(GMT_OFFSET_SEC,DAYLIGHT_OFFSET_SEC,NTP_SERVER1,NTP_SERVER2);
+  for(int i=0;i<10 && time(nullptr)<1600000000;i++){delay(1000);Serial.print(".");}
+  ntp_ok = (time(nullptr)>1600000000);
+  Serial.println(ntp_ok?"\nNTP OK":"\nNTP FAIL");
+}
+
+void fbInit() {
+  cfg.api_key=API_KEY; cfg.database_url=DATABASE_URL;
+  auth.user.email=USER_EMAIL; auth.user.password=USER_PASSWORD;
+  Firebase.begin(&cfg,&auth); Firebase.reconnectWiFi(true);
+  Serial.println("Firebase ready");
+}
+
+// -------------- Firestore plan check (with used check) ----------------
+bool checkMatch() {
+  String today = dateStr(), now = timeHM();
+  if (!Firebase.Firestore.listDocuments(&fbdo, FIREBASE_PROJECT_ID, "",
+      "weeklyPlans", 10, "", "", "", false)) return false;
+  FirebaseJson arr; arr.setJsonData(fbdo.payload());
+  FirebaseJsonData docs; arr.get(docs, "documents");
+  FirebaseJsonArray ja; ja.setJsonArrayData(docs.stringValue);
+  bool match = false; has_next = false;
+
+  for (size_t i = 0; i < ja.size(); i++) {
+    FirebaseJsonData ji; ja.get(ji, i);
+    FirebaseJson jd; jd.setJsonData(ji.stringValue);
+    FirebaseJsonData dn; jd.get(dn, "name");
+    String doc = dn.stringValue.substring(dn.stringValue.lastIndexOf('/') + 1);
+    if (!Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "",
+        ("weeklyPlans/" + doc).c_str(), "")) continue;
+    FirebaseJson jj; jj.setJsonData(fbdo.payload());
+    FirebaseJsonData d, t, u;
+    jj.get(d, "fields/date/stringValue");
+    jj.get(t, "fields/time/stringValue");
+    bool used = false;
+    if (jj.get(u, "fields/used/booleanValue")) {
+      used = u.boolValue;
+    }
+    String dd = d.stringValue, tt = t.stringValue;
+
+    if (!used && dd == today && tt == now) {
+      match = true;
+      triggeredDocId = doc;
+    } else if (!used && !has_next && (dd > today || (dd == today && tt > now))) {
+      nextDate = dd; nextTime = tt; has_next = true;
+    }
+  }
+  return match;
+}
+
+// -------------- setup --------------------------------------------------
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22);
+  Wire.setClock(50000);
+  pinMode(LED_PIN, OUTPUT); pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP); pinMode(IR_SENSOR_PIN, INPUT);
+  pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT); pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3D)) { while (1); }
+  oledMsg("Connecting", "{}");
+  wifiInit(); oledMsg("WiFi OK");
+  ntpInit(); oledMsg("WELCOME");
+  fbInit();
+
+  checkMatch();  // 预加载下一个提醒计划
+}
+
+// -------------- loop ---------------------------------------------------
+void loop() {
+  t_now = millis();
+
+  if (stage == READY) {
+    if (checkMatch()) {
+      stage = REMINDER;
+      t_match = t_now;
+      oledMsg("Take", "Medi");
+      digitalWrite(LED_PIN, HIGH);
+      tone(BUZZER_PIN, 1000);
+    } else {
+      static unsigned long t_ref = 0;
+      if (t_now - t_ref > 60000) {
+        t_ref = t_now;
+        oledHeader();
+        display.display();
+      }
+    }
+  }
+
+  else if (stage == REMINDER) {
+    if (t_now - t_match >= BTN_WINDOW) {
+      logRec("Missed");
+      markUsed(triggeredDocId);
+      digitalWrite(LED_PIN, LOW); noTone(BUZZER_PIN);
+      oledMsg("Missed");
+      stage = SHOW_MSG; t_show = t_now;
+    }
+    if (digitalRead(BUTTON_PIN) == LOW) {
+      logRec("On time");
+      markUsed(triggeredDocId);
+      noTone(BUZZER_PIN);
+      motor60();
+      stage = WAIT_IR; t_btn = t_now;
+      irTriggeredCount = 0;
+      oledMsg("Please", "Take");
+    }
+  }
+
+  else if (stage == WAIT_IR) {
+    int irVal = analogRead(IR_SENSOR_PIN);
+    if (irVal > IR_THRESHOLD) {
+      irTriggeredCount++;
+    } else {
+      irTriggeredCount = 0;
+    }
+    if (irTriggeredCount >= IR_DEBOUNCE_COUNT) {
+      digitalWrite(LED_PIN, LOW);
+      oledMsg("Thanks");
+      stage = SHOW_MSG; t_show = t_now;
+    }
+    else if (t_now - t_btn >= IR_WINDOW) {
+      logRec("Late");
+      digitalWrite(LED_PIN, LOW);
+      oledMsg("Late");
+      stage = SHOW_MSG; t_show = t_now;
+    } else {
+      oledMsg("Please", "Take");
+    }
+    if (t_now % LED_BLINK < LED_BLINK / 2)
+      digitalWrite(LED_PIN, HIGH);
+    else
+      digitalWrite(LED_PIN, LOW);
+  }
+
+  else if (stage == SHOW_MSG) {
+    if (t_now - t_show >= MSG_DURATION) {
+      stage = READY;
+      digitalWrite(LED_PIN, LOW);
+      has_next = false;
+      checkMatch();
+      oledHeader();
+      if (has_next) {
+        display.setTextSize(1);
+        display.setCursor(0, 25);
+        display.println("Next: " + nextDate + " " + nextTime);
+      } else {
+        display.setTextSize(2);
+        display.setCursor(34, 25);
+        display.println("READY");
+      }
+      display.display();
+    }
+  }
+}
+
