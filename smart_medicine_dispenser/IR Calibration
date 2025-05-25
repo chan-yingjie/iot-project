@@ -1,0 +1,46 @@
+#define IR_PIN 36  // GP2Y0A02YK0F OUT: GPIO36
+
+unsigned long lastPrintTime = 0;
+const unsigned long interval = 10000;  
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  // print title of table
+  Serial.println("Time(ms),ADC_Avg,Voltage(V),Distance(cm)");
+}
+
+void loop() {
+  unsigned long currentTime = millis();
+
+  if (currentTime - lastPrintTime >= interval) {
+    lastPrintTime = currentTime;
+
+    const int samples = 5;
+    int sum = 0;
+
+    for (int i = 0; i < samples; i++) {
+      sum += analogRead(IR_PIN);
+      delay(100);
+    }
+
+    int avg = sum / samples;
+    float voltage = avg * (3.3 / 4095.0);  // ESP32 ADC 3.3V 
+    float distanceCM = 9462 / (voltage * 1000 - 16.92);  // for reference
+
+    // 限制无效结果
+    if (distanceCM < 0 || distanceCM > 150) {
+      distanceCM = -1;
+    }
+
+    // print CSV format：time,avg,voltage,Estimated Distance
+    Serial.print(currentTime);
+    Serial.print(",");
+    Serial.print(avg);
+    Serial.print(",");
+    Serial.print(voltage, 2);
+    Serial.print(",");
+    Serial.println(distanceCM, 1);
+  }
+}
