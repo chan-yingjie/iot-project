@@ -1,0 +1,97 @@
+// Stepper Motor 45-Degree Rotation Test Code
+// For ESP32, 28BYJ-48 stepper motor with ULN2003 driver board
+
+// Pin definitions - modify as needed
+#define IN1 2    // Stepper motor control pin 1
+#define IN2 13   // Stepper motor control pin 2
+#define IN3 25   // Stepper motor control pin 3
+#define IN4 26   // Stepper motor control pin 4
+
+// Test button pin
+#define TEST_BUTTON 4  // Button connected between this pin and GND
+
+// Stepper motor sequence - 8-step half-step drive
+const int stepSequence[8][4] = {
+  {1,0,0,0},  // Step 1
+  {1,1,0,0},  // Step 2
+  {0,1,0,0},  // Step 3
+  {0,1,1,0},  // Step 4
+  {0,0,1,0},  // Step 5
+  {0,0,1,1},  // Step 6
+  {0,0,0,1},  // Step 7
+  {1,0,0,1}   // Step 8
+};
+
+// Rotation parameters
+const int STEPS_PER_DEGREE = 11.38;  // Approximate steps per degree (2048 steps / 360° ≈ 5.69, half-step mode ≈ 11.38)
+const int ROTATION_ANGLE = 45;       // Rotation angle in degrees
+const int STEP_DELAY_US = 2000;      // Step delay in microseconds
+
+void setup() {
+  // Initialize Serial
+  Serial.begin(115200);
+  Serial.println("\nStepper Motor Test - Rotate 45 Degrees");
+  
+  // Set motor pins as output
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  
+  // Set button pin as input with pull-up resistor
+  pinMode(TEST_BUTTON, INPUT_PULLUP);
+  
+  // Initialize all motor pins to LOW
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+  
+  Serial.println("Ready. Press the button to start rotation test...");
+}
+
+void loop() {
+  // Check if button is pressed
+  if (digitalRead(TEST_BUTTON) == LOW) {
+    delay(50);  // Simple debounce
+    if (digitalRead(TEST_BUTTON) == LOW) {
+      Serial.println("Button pressed, rotating 45 degrees...");
+      rotateMotor(ROTATION_ANGLE);
+      
+      // Wait for button release
+      while (digitalRead(TEST_BUTTON) == LOW) {
+        delay(10);
+      }
+    }
+  }
+}
+
+// Rotate stepper motor by specified angle
+void rotateMotor(int angle) {
+  // Calculate number of steps needed
+  int steps = angle * STEPS_PER_DEGREE;
+  Serial.print("Starting rotation, steps: ");
+  Serial.println(steps);
+  
+  // Execute steps
+  for (int i = 0; i < steps; i++) {
+    int step = i % 8;  // Get current step index (0-7)
+    
+    // Set stepper motor pins
+    digitalWrite(IN1, stepSequence[step][0]);
+    digitalWrite(IN2, stepSequence[step][1]);
+    digitalWrite(IN3, stepSequence[step][2]);
+    digitalWrite(IN4, stepSequence[step][3]);
+    
+    // Delay to control speed
+    delayMicroseconds(STEP_DELAY_US);
+  }
+  
+  // Turn off all coils after rotation
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+  
+  Serial.println("Rotation complete");
+}
